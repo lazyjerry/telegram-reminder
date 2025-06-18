@@ -1,0 +1,17 @@
+{
+  "name": "telegram-reminder",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+  },
+  "dependencies": {
+    "chrono-node": "^2.8.3",
+    "drizzle-orm": "^0.44.2",
+    "hono": "^4.8.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250618.0",
+    "wrangler": "^4.4.0"
+  }
+}
