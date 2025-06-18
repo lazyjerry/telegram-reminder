@@ -1,0 +1,39 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "telegram-reminder",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-06-18",
+	"compatibility_flags": ["nodejs_compat"],
+	// "vars": {
+	//   "MY_VAR": "my-variable"
+	// },
+	// "kv_namespaces": [
+	//   {
+	//     "binding": "MY_KV_NAMESPACE",
+	//     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+	//   }
+	// ],
+	// "r2_buckets": [
+	//   {
+	//     "binding": "MY_BUCKET",
+	//     "bucket_name": "my-bucket"
+	//   }
+	// ],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "reminders",
+			"database_id": "84ec30ca-1a08-4d37-91b4-fb065f4bdb8d"
+		}
+	],
+	"triggers": {
+		"crons": ["0 * * * *"]
+	}
+	// "ai": {
+	//   "binding": "AI"
+	// },
+	// "observability": {
+	//   "enabled": true,
+	//   "head_sampling_rate": 1
+	// }
+}
