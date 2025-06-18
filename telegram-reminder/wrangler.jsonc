@@ -28,10 +28,8 @@
 	],
 	"triggers": {
 		"crons": ["0 * * * *"]
-	}
-	// "ai": {
-	//   "binding": "AI"
-	// },
+	},
+	"ai": { "binding": "AI" }
 	// "observability": {
 	//   "enabled": true,
 	//   "head_sampling_rate": 1
