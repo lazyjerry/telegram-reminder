@@ -174,8 +174,8 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 
 ## Demo Bot
 
-• @lazyjerry_bot
-• 目前 已關閉 AI 解析，僅靠 chrono-node ——
+- 請在 Telegram 加入機器人 @lazyjerry_bot
+- 目前 已關閉 AI 解析，僅靠 chrono-node ——
 對常規語句（明天早上 9 點… / 每小時…）準確度高，但對非常口語化輸入可能顯得「不太智能」。
 
 ⸻
