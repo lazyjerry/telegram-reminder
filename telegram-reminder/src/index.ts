@@ -121,7 +121,7 @@ app.post("/webhook/:token", async (ctx) => {
 			const t = r.match_time === "*" ? "每小時" : `${r.match_time}:00`;
 			return `• ${t} ⇒ ${r.content}\n  🆔 ${r.uuid}`;
 		});
-		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📋 您的排程：\n${lines.join("\n")}`);
+		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📋 您的排程：\n\n${lines.join("\n\n")}`);
 		return ctx.json({ ok: true });
 	}
 
@@ -161,9 +161,9 @@ app.post("/webhook/:token", async (ctx) => {
 
 		const lines = results.map((r) => {
 			const t = r.match_time === "*" ? "每小時" : `${r.match_time}:00`;
-			return `• ${t} ⇒ ${r.content}\n  /del  ${r.uuid}`;
+			return `• ${t} ⇒ ${r.content}\n  /del ${r.uuid}`;
 		});
-		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `⚠️ 您要刪除的排程（請複製貼上指令）：\n${lines.join("\n\n")}`);
+		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `⚠️ 您要刪除的排程（請複製貼上指令）：\n\n${lines.join("\n\n")}`);
 		return ctx.json({ ok: true });
 	}
 
