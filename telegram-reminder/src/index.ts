@@ -231,7 +231,7 @@ export default {
 			const shouldSend = row.match_time === "*" ? isWithinHours(hour, row.open_hour, row.close_hour) : isWithinHours(hour, row.open_hour, row.close_hour);
 
 			if (shouldSend) {
-				ctx.executionCtx.waitUntil(sendTGWithAi(env.AI, env.TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
+				ctx.waitUntil(sendTGWithAi(env.AI, env.TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
 			}
 		}
 	},
