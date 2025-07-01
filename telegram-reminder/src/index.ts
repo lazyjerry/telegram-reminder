@@ -119,7 +119,7 @@ app.post("/webhook/:token", async (ctx) => {
 
 		const lines = results.map((r) => {
 			const t = r.match_time === "*" ? "每小時" : `${r.match_time}:00`;
-			return `• ${t} ⇒ ${r.content}\n  🆔 ${r.uuid}`;
+			return `🥹${t} ⇒ ${r.content}\n  🆔 ${r.uuid}`;
 		});
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📋 您的排程：\n${lines.join("\n")}`);
 		return ctx.json({ ok: true });
@@ -140,12 +140,6 @@ app.post("/webhook/:token", async (ctx) => {
 		return ctx.json({ ok: true });
 	}
 
-	// 判斷如果開頭是 / 或 #，則視為指令
-	if (text.startsWith("/") || text.startsWith("#")) {
-		await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請使用自然語言描述排程，例如：早上 8 點提醒我開會");
-		return ctx.json({ ok: true });
-	}
-
 	/* 刪除 UUID */
 	const delMatch = text.match(/^\/del\s+([0-9a-fA-F-]{36})$/);
 	if (delMatch && username) {
@@ -153,6 +147,29 @@ app.post("/webhook/:token", async (ctx) => {
 		const res = await DB.prepare("DELETE FROM reminders WHERE uuid = ? AND username = ?").bind(uuid, username).run();
 
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, res.success && res.meta.changes ? `🗑 已刪除排程 ${uuid}` : "⚠ 找不到該排程或無權刪除");
+		return ctx.json({ ok: true });
+	}
+
+	if (text === "/del" && username) {
+		// 如果只輸入 /del，則回傳提示訊息並且返回目前的排程列表
+		const { results } = await DB.prepare("SELECT uuid, match_time, content FROM reminders WHERE username = ?").bind(username).all<{ uuid: string; match_time: string; content: string }>();
+
+		if (!results.length) {
+			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "ℹ️ 目前沒有任何排程可以刪除。請先新增排程");
+			return ctx.json({ ok: true });
+		}
+
+		const lines = results.map((r) => {
+			const t = r.match_time === "*" ? "每小時" : `${r.match_time}:00`;
+			return `🚮${t} ⇒ ${r.content}\n  /del  ${r.uuid}`;
+		});
+		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `⚠️ 您要刪除的排程（請複製貼上指令）：\n${lines.join("\n\n")}`);
+		return ctx.json({ ok: true });
+	}
+
+	// 判斷如果開頭是 / 或 #，則視為指令
+	if (text.startsWith("/") || text.startsWith("#")) {
+		await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請使用自然語言描述排程，例如：早上 8 點提醒我開會");
 		return ctx.json({ ok: true });
 	}
 
@@ -189,7 +206,7 @@ app.post("/webhook/:token", async (ctx) => {
 	await DB.prepare("INSERT INTO reminders (uuid, username, content, match_time) VALUES (?, ?, ?, ?)").bind(uuid, username, content, hour).run();
 
 	const desc = hour === "*" ? "每小時" : `${hour}:00 整`;
-	await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📝 已排程 ${desc} ⇒ ${content}\n🆔 ${uuid}\n如需刪除請輸入：/del ${uuid}`);
+	await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📝 已排程 ${desc} ⇒ ${content}\n🆔 ${uuid}\n🗑️如需刪除請輸入：\n\n/del ${uuid}`);
 	return ctx.json({ ok: true });
 });
 
