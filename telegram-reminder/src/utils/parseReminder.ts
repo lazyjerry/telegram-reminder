@@ -42,18 +42,21 @@ export const parseReminder = async (ai: Ai, text: string, zone = "Asia/Taipei"):
 		required: ["hour", "content"],
 		additionalProperties: false,
 	};
+	try {
+		const resp = await ai.run(LLM_TID, {
+			messages,
+			response_format: { type: "json_schema", json_schema: schema },
+			max_tokens: 256,
+		});
 
-	const resp = await ai.run(LLM_TID, {
-		messages,
-		response_format: { type: "json_schema", json_schema: schema },
-		max_tokens: 256,
-	});
+		// Workers AI 在 JSON Mode 下，回傳物件或字串皆有可能
+		const payload = typeof resp.response === "string" ? JSON.parse(resp.response) : resp.response;
 
-	// Workers AI 在 JSON Mode 下，回傳物件或字串皆有可能
-	const payload = typeof resp.response === "string" ? JSON.parse(resp.response) : resp.response;
-
-	const { hour, content } = payload as Parsed;
-	if (hour && content) return { hour, content };
+		const { hour, content } = payload as Parsed;
+		if (hour && content) return { hour, content };
+	} catch (error) {
+		// 可以根據需要記錄錯誤
+	}
 
 	// 若仍解析失敗，回傳空物件，交由上層決定後續行為
 	return {};

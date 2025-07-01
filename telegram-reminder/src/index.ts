@@ -188,11 +188,11 @@ app.post("/webhook/:token", async (ctx) => {
 	// 如果沒有解析出 hour 或 content，則提示使用者
 
 	if (!hour) {
-		await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請先說明「何時」要提醒，例如：「早上 8 點」或「每小時」");
+		await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 解析錯誤，請先說明「何時」要提醒，例如：「早上 8 點」或「每小時」");
 		return ctx.json({ ok: true });
 	}
 	if (!content) {
-		await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請說明要提醒的「內容」");
+		await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 解析錯誤，請說明要提醒的「內容」");
 		return ctx.json({ ok: true });
 	}
 

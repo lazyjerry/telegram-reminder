@@ -64,24 +64,31 @@ export const sendTGWithAi = async (ai: Ai, botToken: string, chatId: number, rem
 	};
 
 	/* ---------- 4. 呼叫 Workers AI（JSON Mode） ---------- */
-	const resp = await ai.run(LLM_ID, {
-		messages,
-		response_format: { type: "json_schema", json_schema: schema },
-		max_tokens: TOKEN_OPTS[Math.floor(Math.random() * TOKEN_OPTS.length)],
-	});
+	let cleanReply = "AI 錯誤，請確認原因修復。";
+	try {
+		const resp = await ai.run(LLM_ID, {
+			messages,
+			response_format: { type: "json_schema", json_schema: schema },
+			max_tokens: TOKEN_OPTS[Math.floor(Math.random() * TOKEN_OPTS.length)],
+		});
 
-	console.log("AI Response:", resp); // Debug: Log the AI response
+		console.log("AI Response:", resp); // Debug: Log the AI response
 
-	// Workers AI 回傳內容在 choices[0].message.content (字串狀 JSON)
-	const payload =
-		typeof resp.response === "string"
-			? JSON.parse(resp.response) // 有時 model 會把 JSON 當字串回傳
-			: resp.response; // 大部分情況已是物件
+		// Workers AI 回傳內容在 choices[0].message.content (字串狀 JSON)
+		const payload =
+			typeof resp.response === "string"
+				? JSON.parse(resp.response) // 有時 model 會把 JSON 當字串回傳
+				: resp.response; // 大部分情況已是物件
 
-	const reply = payload.reply; // ← schema 裡定義的欄位
+		const reply = payload.reply; // ← schema 裡定義的欄位
 
-	/* ---------- 5. 雙重保險清洗 ---------- */
-	const cleanReply = sanitize(reply);
+		/* ---------- 5. 雙重保險清洗 ---------- */
+		cleanReply = sanitize(reply);
+	} catch (e) {
+		console.error("AI Error:", e);
+		// cleanReply 添加錯誤原因
+		cleanReply = `AI 錯誤，請確認原因：${e.message} 記得修復喔。`;
+	}
 
 	/* ---------- 6. 發送 Telegram ---------- */
 	return sendTG(botToken, chatId, cleanReply);
