@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { env } from "hono/adapter";
 import { parseReminder } from "./utils/parseReminder";
+import { sendTG, sendTGWithAi } from "./utils/tg-bot";
 
 type Env = {
 	DB: D1Database;
 	TELEGRAM_BOT_TOKEN: string;
 	TELEGRAM_WEBHOOK_TOKEN: string;
+	AI: Ai;
 };
 
 /* ---------- 全域說明文字：只修改這裡 ---------- */
@@ -22,15 +24,6 @@ const getTaipeiHour = () =>
 		hour: "2-digit",
 	});
 
-const REMINDER_PREFIX = "🔔 提醒排程：\n";
-
-const sendTG = (token: string, id: number, text: string) =>
-	fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ chat_id: id, text }),
-	});
-
 // 判斷 hour ('00'–'23') 是否落在 open-close 之間（支援跨夜）包含開始與結束時間點
 const isWithinHours = (h: string, open: string, close: string) => {
 	const n = +h,
@@ -42,12 +35,12 @@ const isWithinHours = (h: string, open: string, close: string) => {
 };
 
 /* ---------- Webhook ---------- */
-app.post("/webhook/:token", async (c) => {
-	const { DB, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_TOKEN } = env(c);
-	if (c.req.param("token") !== TELEGRAM_WEBHOOK_TOKEN) return c.text("403", 403);
+app.post("/webhook/:token", async (ctx) => {
+	const { DB, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_TOKEN } = env(ctx);
+	if (ctx.req.param("token") !== TELEGRAM_WEBHOOK_TOKEN) return ctx.text("403", 403);
 
-	const { message: msg } = await c.req.json<any>();
-	if (!msg || !msg.text) return c.json({ ok: true });
+	const { message: msg } = await ctx.req.json<any>();
+	if (!msg || !msg.text) return ctx.json({ ok: true });
 
 	const username = msg.chat.username;
 	const chatId = msg.chat.id;
@@ -59,7 +52,7 @@ app.post("/webhook/:token", async (c) => {
 	/* /help */
 	if (text === "/help") {
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, HELP_TEXT);
-		return c.json({ ok: true });
+		return ctx.json({ ok: true });
 	}
 
 	/* /hours HH HH */
@@ -69,11 +62,11 @@ app.post("/webhook/:token", async (c) => {
 		// 檢查開關小時是否有效 支援跨夜
 		if (!/^\d{1,2}$/.test(open) || !/^\d{1,2}$/.test(close) || +open < 0 || +open > 23 || +close < 0 || +close > 23) {
 			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請輸入有效的營業時間 (00-23)");
-			return c.json({ ok: true });
+			return ctx.json({ ok: true });
 		} else if (+close - +open == 0) {
 			// 檢查開關小時至少要一個時間跨度以上
 			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請輸入有效的營業時間 (00-23) 開始與結束時間需要至少相隔一小時");
-			return c.json({ ok: true });
+			return ctx.json({ ok: true });
 		}
 
 		await DB.prepare("UPDATE users SET open_hour = ?, close_hour = ? WHERE username = ?").bind(open.padStart(2, "0"), close.padStart(2, "0"), username).run();
@@ -84,7 +77,7 @@ app.post("/webhook/:token", async (c) => {
 		} else {
 			await sendTG(TELEGRAM_BOT_TOKEN, chatId, `✅ 已更新營業時間：${open.padStart(2, "0")}:00–${close.padStart(2, "0")}:00`);
 		}
-		return c.json({ ok: true });
+		return ctx.json({ ok: true });
 	}
 
 	if (text === "/hours" && username) {
@@ -98,7 +91,7 @@ app.post("/webhook/:token", async (c) => {
 
 		if (!results.length) {
 			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "ℹ️ 目前沒有任何排程");
-			return c.json({ ok: true });
+			return ctx.json({ ok: true });
 		}
 
 		const lines = results.map((r) => {
@@ -106,7 +99,7 @@ app.post("/webhook/:token", async (c) => {
 			return `• ${t} ⇒ ${r.content}\n  🆔 ${r.uuid}`;
 		});
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📋 您的排程：\n${lines.join("\n")}`);
-		return c.json({ ok: true });
+		return ctx.json({ ok: true });
 	}
 
 	/* /start */
@@ -121,13 +114,13 @@ app.post("/webhook/:token", async (c) => {
 			.run();
 
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, ["✅ 已訂閱提醒！", "", HELP_TEXT, "", `目前營業時間：${userRow.open_hour}:00–${userRow.close_hour}:00`, "⚠ 提醒僅在營業時間內推送"].join("\n"));
-		return c.json({ ok: true });
+		return ctx.json({ ok: true });
 	}
 
 	// 判斷如果開頭是 / 或 #，則視為指令
 	if (text.startsWith("/") || text.startsWith("#")) {
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請使用自然語言描述排程，例如：早上 8 點提醒我開會");
-		return c.json({ ok: true });
+		return ctx.json({ ok: true });
 	}
 
 	/* 刪除 UUID */
@@ -137,12 +130,12 @@ app.post("/webhook/:token", async (c) => {
 		const res = await DB.prepare("DELETE FROM reminders WHERE uuid = ? AND username = ?").bind(uuid, username).run();
 
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, res.success && res.meta.changes ? `🗑 已刪除排程 ${uuid}` : "⚠ 找不到該排程或無權刪除");
-		return c.json({ ok: true });
+		return ctx.json({ ok: true });
 	}
 
 	/* 新增排程 */
 	// 解析提醒時間和內容
-	const { AI } = env(c);
+	const { AI } = env(ctx);
 	let { hour, content } = await parseReminder(AI, text, TPE_ZONE);
 
 	// 每小時關鍵詞
@@ -156,17 +149,17 @@ app.post("/webhook/:token", async (c) => {
 
 	if (!hour) {
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請先說明「何時」要提醒，例如：「早上 8 點」或「每小時」");
-		return c.json({ ok: true });
+		return ctx.json({ ok: true });
 	}
 	if (!content) {
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請說明要提醒的「內容」");
-		return c.json({ ok: true });
+		return ctx.json({ ok: true });
 	}
 
 	/* 營業時間限制：僅針對特定小時 */
 	if (hour !== "*" && !isWithinHours(hour, userRow.open_hour, userRow.close_hour)) {
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `⚠ ${hour}:00 不在營業時間 ${userRow.open_hour}:00–${userRow.close_hour}:00 內，排程未新增`);
-		return c.json({ ok: true });
+		return ctx.json({ ok: true });
 	}
 
 	const uuid = crypto.randomUUID();
@@ -174,25 +167,25 @@ app.post("/webhook/:token", async (c) => {
 
 	const desc = hour === "*" ? "每小時" : `${hour}:00 整`;
 	await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📝 已排程 ${desc} ⇒ ${content}\n🆔 ${uuid}\n如需刪除：刪除 ${uuid}`);
-	return c.json({ ok: true });
+	return ctx.json({ ok: true });
 });
 
 /* ---------- GET /debug/:token?text=... ---------- */
-app.get("/debug/:token", async (c) => {
-	const { AI, TELEGRAM_WEBHOOK_TOKEN } = env(c);
-	if (c.req.param("token") !== TELEGRAM_WEBHOOK_TOKEN) return c.text("403", 403);
+app.get("/debug/:token", async (ctx) => {
+	const { AI, TELEGRAM_WEBHOOK_TOKEN } = env(ctx);
+	if (ctx.req.param("token") !== TELEGRAM_WEBHOOK_TOKEN) return ctx.text("403", 403);
 
-	const txt = c.req.query("text") ?? "";
+	const txt = ctx.req.query("text") ?? "";
 	const parsed = await parseReminder(AI, txt, TPE_ZONE); // ★ 呼叫同一支 parser
-	return c.json({ input: txt, parsed });
+	return ctx.json({ input: txt, parsed });
 });
 
 /* ---------- /test/:token?hour=HH ---------- */
-app.get("/test/:token", async (c) => {
-	const { DB, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_TOKEN } = env(c);
-	if (c.req.param("token") !== TELEGRAM_WEBHOOK_TOKEN) return c.text("403", 403);
+app.get("/test/:token", async (ctx) => {
+	const { DB, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_TOKEN } = env(ctx);
+	if (ctx.req.param("token") !== TELEGRAM_WEBHOOK_TOKEN) return ctx.text("403", 403);
 
-	const qHour = c.req.query("hour");
+	const qHour = ctx.req.query("hour");
 	const hour = qHour && /^\d{1,2}$/.test(qHour) ? qHour.padStart(2, "0") : getTaipeiHour();
 
 	const { results } = await DB.prepare(
@@ -204,9 +197,18 @@ app.get("/test/:token", async (c) => {
 		.bind(hour)
 		.all<{ content: string; match_time: string; chat_id: number; open_hour: string; close_hour: string }>();
 
-	for (const row of results) if (row.match_time === "*" ? isWithinHours(hour, row.open_hour, row.close_hour) : isWithinHours(hour, row.open_hour, row.close_hour)) c.executionCtx.waitUntil(sendTG(TELEGRAM_BOT_TOKEN, row.chat_id, REMINDER_PREFIX + row.content));
+	// 解析提醒時間和內容
+	const { AI } = env(ctx);
 
-	return c.json({ ok: true, testHour: hour, sent: results.length });
+	for (const row of results) {
+		const shouldSend = row.match_time === "*" ? isWithinHours(hour, row.open_hour, row.close_hour) : isWithinHours(hour, row.open_hour, row.close_hour);
+
+		if (shouldSend) {
+			ctx.executionCtx.waitUntil(sendTGWithAi(AI, TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
+		}
+	}
+
+	return ctx.json({ ok: true, testHour: hour, sent: results.length });
 });
 
 /* ---------- Cron Job ---------- */
@@ -223,7 +225,15 @@ export default {
 			.bind(hour)
 			.all<{ content: string; match_time: string; chat_id: number; open_hour: string; close_hour: string }>();
 
-		for (const row of results) if (row.match_time === "*" ? isWithinHours(hour, row.open_hour, row.close_hour) : isWithinHours(hour, row.open_hour, row.close_hour)) ctx.waitUntil(sendTG(env.TELEGRAM_BOT_TOKEN, row.chat_id, REMINDER_PREFIX + row.content));
+		// 解析提醒時間和內容;
+
+		for (const row of results) {
+			const shouldSend = row.match_time === "*" ? isWithinHours(hour, row.open_hour, row.close_hour) : isWithinHours(hour, row.open_hour, row.close_hour);
+
+			if (shouldSend) {
+				ctx.executionCtx.waitUntil(sendTGWithAi(env.AI, env.TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
+			}
+		}
 	},
 	fetch: app.fetch,
 };
