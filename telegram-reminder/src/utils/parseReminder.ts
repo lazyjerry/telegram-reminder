@@ -1,6 +1,6 @@
 import * as chrono from "chrono-node";
 import type { Ai } from "@cloudflare/ai"; // 2024-05+ 型別檔
-import { LLM_ID } from "../ai-config";
+import { LLM_TID } from "../ai-config";
 
 type Parsed = { hour?: string; content?: string };
 
@@ -30,7 +30,7 @@ export const parseReminder = async (
 	const prompt = '你是一個文字解析的工具，不需要多作回應，只要直接輸出的 JSON String，欄位: "hour" = 00–23 兩位數或 * ，"content" = 去除時間後剩餘提醒文字\n\n' + "請解析以下文字，並回傳 JSON 格式的字串，包含兩個欄位：\n" + text;
 	// Debug: Log the prompt being sent to the AI
 	console.log("AI Prompt:", prompt);
-	const resp: { response: string } = await ai.run(LLM_ID, { prompt, max_tokens: 512 });
+	const resp: { response: string } = await ai.run(LLM_TID, { prompt, max_tokens: 512 });
 
 	try {
 		console.log("AI Response:", resp.response); // Debug: Log the AI response
