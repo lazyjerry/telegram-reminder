@@ -11,7 +11,7 @@ type Env = {
 };
 
 /* ---------- 全域說明文字：只修改這裡 ---------- */
-const HELP_TEXT = ["📖 功能列表", "────────────────", "/start ‣ 訂閱並顯示說明", "/help  ‣ 查看本說明", "/hours HH HH ‣ 設定營業時間 [開始 結束] 記得要在指令後面輸入喔！", "/list  ‣ 列出全部排程", "刪除 <UUID> ‣ 刪除指定排程", "", "自然語言排程範例：", "  • 早上 9 點提醒我開會", "  • 每小時 提醒伸展"].join("\n");
+const HELP_TEXT = ["📖 功能列表", "────────────────", "/start ‣ 訂閱並顯示說明", "/help  ‣ 查看本說明", "/hours HH HH ‣ 設定營業時間 [開始 結束] 記得要在指令後面輸入喔！", "/list  ‣ 列出全部排程", "/del <UUID> ‣ 刪除指定排程", "", "自然語言排程範例：", "  • 早上 9 點提醒我開會", "  • 每小時 提醒伸展"].join("\n");
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -147,7 +147,7 @@ app.post("/webhook/:token", async (ctx) => {
 	}
 
 	/* 刪除 UUID */
-	const delMatch = text.match(/^刪除\s+([0-9a-fA-F-]{36})$/);
+	const delMatch = text.match(/^\/del\s+([0-9a-fA-F-]{36})$/);
 	if (delMatch && username) {
 		const uuid = delMatch[1];
 		const res = await DB.prepare("DELETE FROM reminders WHERE uuid = ? AND username = ?").bind(uuid, username).run();
@@ -189,7 +189,7 @@ app.post("/webhook/:token", async (ctx) => {
 	await DB.prepare("INSERT INTO reminders (uuid, username, content, match_time) VALUES (?, ?, ?, ?)").bind(uuid, username, content, hour).run();
 
 	const desc = hour === "*" ? "每小時" : `${hour}:00 整`;
-	await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📝 已排程 ${desc} ⇒ ${content}\n🆔 ${uuid}\n如需刪除：刪除 ${uuid}`);
+	await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📝 已排程 ${desc} ⇒ ${content}\n🆔 ${uuid}\n如需刪除請輸入：/del ${uuid}`);
 	return ctx.json({ ok: true });
 });
 
