@@ -24,17 +24,26 @@ const getTaipeiHour = () =>
 		hour: "2-digit",
 	});
 
-// 判斷 hour ('00'–'23') 是否落在 open-close 之間（支援跨夜）包含開始與結束時間點
-const isWithinHours = (h: string, open: string, close: string) => {
+/**
+ * 判斷目標小時 h ('00'–'23') 是否落在 open~close 之間
+ * - 支援跨夜
+ * - open === close 代表 24 小時營業
+ */
+const isWithinHours = (h: string, open: string, close: string): boolean => {
 	const n = +h,
 		s = +open,
 		e = +close;
-	// 若開放小時小於或等於結束小時：判斷是否介於兩者之間（包含邊界）
-	// 若跨夜：只要 n 大於等於 open 或小於等於 close 即算在範圍內
-	return s <= e ? n >= s && n <= e : n >= s || n <= e;
+
+	if (s === e) return true; // 24h
+
+	// 同日範圍：00–23
+	if (s < e) return n >= s && n <= e;
+
+	// 跨夜範圍：例如 20~05
+	return n >= s || n <= e;
 };
 
-/* ---------- Webhook ---------- */
+/* ----- Webhook ---------- */
 app.post("/webhook/:token", async (ctx) => {
 	const { DB, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_TOKEN } = env(ctx);
 	if (ctx.req.param("token") !== TELEGRAM_WEBHOOK_TOKEN) return ctx.text("403", 403);
@@ -55,34 +64,48 @@ app.post("/webhook/:token", async (ctx) => {
 		return ctx.json({ ok: true });
 	}
 
-	/* /hours HH HH */
+	/* /hours HH HH 或 營業時間 HH HH */
 	const hourCmd = text.match(/^(?:\/hours|營業時間)\s+(\d{1,2})\s+(\d{1,2})$/i);
 	if (hourCmd && username) {
-		const [, open, close] = hourCmd;
-		// 檢查開關小時是否有效 支援跨夜
-		if (!/^\d{1,2}$/.test(open) || !/^\d{1,2}$/.test(close) || +open < 0 || +open > 23 || +close < 0 || +close > 23) {
-			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請輸入有效的營業時間 (00-23)");
-			return ctx.json({ ok: true });
-		} else if (+close - +open == 0) {
-			// 檢查開關小時至少要一個時間跨度以上
-			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請輸入有效的營業時間 (00-23) 開始與結束時間需要至少相隔一小時");
+		let [, open, close] = hourCmd.map((s) => s.padStart(2, "0"));
+
+		/* --- 合法性檢查 --- */
+		const isValid = (h: string) => /^\d{2}$/.test(h) && +h >= 0 && +h <= 23;
+		if (!isValid(open) || !isValid(close)) {
+			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請輸入有效的時間（00–23）");
 			return ctx.json({ ok: true });
 		}
 
-		await DB.prepare("UPDATE users SET open_hour = ?, close_hour = ? WHERE username = ?").bind(open.padStart(2, "0"), close.padStart(2, "0"), username).run();
+		/* 24 小時營業：開關相同 */
+		const isFullDay = open === close;
 
-		// 更新成功後，回覆使用者 提示排程有無跨夜
-		if (+open > +close) {
-			await sendTG(TELEGRAM_BOT_TOKEN, chatId, `✅ 已更新營業時間：${open.padStart(2, "0")}:00–次日 ${close.padStart(2, "0")}:00 (跨夜)`);
-		} else {
-			await sendTG(TELEGRAM_BOT_TOKEN, chatId, `✅ 已更新營業時間：${open.padStart(2, "0")}:00–${close.padStart(2, "0")}:00`);
+		/* 非 24h 時段需保證至少 1 小時 */
+		if (!isFullDay) {
+			const diff = (+close - +open + 24) % 24; // 跨夜時 +24
+			if (diff === 0) {
+				await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 開始與結束時間需至少相隔 1 小時，或輸入同一時間代表 24 小時營業");
+				return ctx.json({ ok: true });
+			}
 		}
+
+		/* --- 寫入資料庫 --- */
+		await DB.prepare("UPDATE users SET open_hour = ?, close_hour = ? WHERE username = ?").bind(open, close, username).run();
+
+		/* --- 組合回覆 --- */
+		const msg = isFullDay ? "✅ 已更新營業時間：24 小時營業" : +open > +close ? `✅ 已更新營業時間：${open}:00 → 次日 ${close}:00 (跨夜)` : `✅ 已更新營業時間：${open}:00–${close}:00`;
+
+		await sendTG(TELEGRAM_BOT_TOKEN, chatId, msg);
 		return ctx.json({ ok: true });
 	}
 
 	if (text === "/hours" && username) {
 		// 如果只輸入 /hours，則回傳目前營業時間
-		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📅 目前營業時間：${userRow.open_hour}:00–${userRow.close_hour}:00\n如果要修改，請在指令後面帶入小時，例如 /hours 10 23`);
+		// 如果是 24 小時營業，則顯示「24 小時營業」
+		if (userRow.open_hour === userRow.close_hour) {
+			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "📅 目前營業時間：24 小時營業");
+		} else {
+			await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📅 目前營業時間：${userRow.open_hour}:00–${userRow.close_hour}:00\n如果要修改，請在指令後面帶入小時，例如 /hours 10 23`);
+		}
 	}
 
 	/* /list */
