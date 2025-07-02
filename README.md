@@ -196,6 +196,8 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 
 ⸻
 
+## 技術棧
+
 | 類別         | 技術                                         |
 | ------------ | -------------------------------------------- |
 | 執行環境     | Cloudflare Workers                           |
@@ -223,7 +225,5 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 - 感謝 Telegram 團隊提供方便的 Bot API
 - 感謝所有開源作者（Hono、chrono-node、pnpm…）的努力
 - 若本專案對你有幫助，歡迎 🌟 star、fork 或提 PR！
-
-XD
 
 ---
