@@ -177,14 +177,12 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 ## AI 解析流程與風險
 
 1. 先跑 chrono-node —— 零成本、確認解析時間是否成功
-2. 如果失敗則返回錯誤提示，成功的話呼叫 Workers AI（模型可自選）
-3. 可能錯誤，錯誤則返回提示。
+2. 如果失敗則返回錯誤提示，成功的話呼叫 Workers AI（模型可自選）判斷擷取提醒內容。
+3. 可能錯誤，錯誤則返回提示：
 
-- AI 生成 使用 JSON MODE → 程式將回傳「缺少時間 / 內容」提示
-- 時區詞彙過於模糊（例：晚點） → 解析成預設值或提示重試 4. 關閉 AI
-- 刪除 wrangler.jsonc 中 "ai" 區塊
-- 在 parseReminder.ts 將 AI fallback 改為 return {}
-- 重新 wrangler deploy 即可 —— 完全不再計費
+- AI 生成 使用 JSON MODE → 程式將回傳「缺少時間 / 內容」提示。
+- 時區詞彙過於模糊（例：晚點） → 解析成預設值或提示重試 4. 關閉 AI。
+- 刪除 wrangler.jsonc 中 "ai" 區塊。
 
 ⸻
 
