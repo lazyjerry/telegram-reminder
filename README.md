@@ -12,9 +12,8 @@
 4. 專案目錄結構
 5. 架設步驟
 6. AI 解析流程與風險
-7. Demo Bot
-8. 技術棧
-9. 感謝與鳴謝
+7. 技術棧
+8. 感謝與鳴謝
 
 ⸻
 
@@ -183,13 +182,6 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 - AI 生成 使用 JSON MODE → 程式將回傳「缺少時間 / 內容」提示。
 - 時區詞彙過於模糊（例：晚點） → 解析成預設值或提示重試 4. 關閉 AI。
 - 刪除 wrangler.jsonc 中 "ai" 區塊。
-
-⸻
-
-## Demo Bot
-
-- 請在 Telegram 加入機器人 @lazyjerry_bot
-- 該機器人綁定白名單，別人不能，請自己架設嘿嘿。
 
 ⸻
 
