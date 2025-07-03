@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { env } from "hono/adapter";
-import { parseReminder } from "./utils/parseReminder";
+import { parseReminder } from "./parseReminder";
 import { sendTG, sendTGWithAi } from "./utils/tg-bot";
 
 type Env = {
@@ -34,13 +34,23 @@ const isWithinHours = (h: string, open: string, close: string): boolean => {
 		s = +open,
 		e = +close;
 
-	if (s === e) return true; // 24h
+	console.log(`[isWithinHours] 檢查小時: ${h} (數值: ${n}), 開始: ${open} (數值: ${s}), 結束: ${close} (數值: ${e})`);
 
-	// 同日範圍：00–23
-	if (s < e) return n >= s && n <= e;
+	if (s === e) {
+		console.log("[isWithinHours] 24 小時營業，回傳 true");
+		return true; // 24h
+	}
+
+	if (s < e) {
+		const result = n >= s && n <= e;
+		console.log(`[isWithinHours] 同日範圍 (${s}~${e})，結果: ${result}`);
+		return result;
+	}
 
 	// 跨夜範圍：例如 20~05
-	return n >= s || n <= e;
+	const result = n >= s || n <= e;
+	console.log(`[isWithinHours] 跨夜範圍 (${s}~${e})，結果: ${result}`);
+	return result;
 };
 
 /* ----- Webhook ---------- */
@@ -176,7 +186,7 @@ app.post("/webhook/:token", async (ctx) => {
 	/* 新增排程 */
 	// 解析提醒時間和內容
 	const { AI } = env(ctx);
-	let { hour, content } = await parseReminder(AI, text, TPE_ZONE);
+	let { hour, content } = await parseReminder(AI, text);
 
 	// 每小時關鍵詞
 	const hourlyRE = /(00-23|每小時|every\s*hour|\/hourly|\/everyhour)/i;
