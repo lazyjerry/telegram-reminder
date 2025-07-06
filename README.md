@@ -63,14 +63,24 @@
 
 ```text
 telegram-reminder/
-├─ wrangler.jsonc         # Workers 設定（Cron / D1 / AI 綁定…）
-├─ init.sql               # D1 資料表結構
-├─ src/
-│  ├─ index.ts            # Worker 入口：路由 + Cron
-│  ├─ parseReminder.ts    # 時間／內容解析（chrono + AI）
-│  └─ ai-config.ts        # 模型 ID 常數
-├─ utils/                 # 其他工具函式
-└─ README.md              # 本文件
+├─ wrangler.jsonc         # Workers 設定檔，定義 Cron 時間、D1 資料庫、AI 模型
+├─ init.sql               # D1 初始 schema，儲存提醒項目與排程狀態
+├─ README.md              # 專案介紹與部署教學
+├─ pnpm-lock.yaml         # 套件版本鎖定檔
+├─ .gitignore             # Git 忽略清單
+├─ src/                   # 主程式碼區
+│  ├─ index.ts            # Worker 入口，處理 Router 與定時觸發
+│  ├─ handler.ts          # 主要業務邏輯：訊息處理與提醒觸發
+│  ├─ parseReminder.ts    # 自然語言時間解析（chrono + AI）
+│  ├─ ai-config.ts        # 模型 ID、提示詞等 AI 設定
+│  ├─ types.ts            # 全域型別定義（如 Reminder 資料型別）
+│  └─ constants.ts        # 常數定義，如時區、訊息範本等
+├─ utils/                 # 工具函式
+│  ├─ scheduler.ts        # 排程相關邏輯（如 nextTrigger 計算）
+│  ├─ logAction.ts        # 操作紀錄與統計更新
+│  └─ chrono.ts           # 時間格式與跨日處理工具
+├─ views/
+│  └─ index.html          # 簡易前端頁面，顯示提醒 UI 或 debug 工具
 ```
 
 若不使用 AI，可刪除 ai-config.ts 與 parseReminder.ts 中的 AI fallback。
