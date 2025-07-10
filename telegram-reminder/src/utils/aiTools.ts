@@ -103,16 +103,33 @@ async function parseReminder(ai: Ai, text: string): Promise<string> {
 	return payload;
 }
 
-/** 呼叫 Workers-AI，並回傳字串 */
+/** 呼叫 Workers‑AI，若回傳非 JSON 或發生錯誤最多重試 3 次 */
 async function callAi(ai: Ai, modelId: string, messages: any, schema: any, max_tokens: number): Promise<any> {
-	console.log("[callAi] 開始，modelId:", modelId, "max_tokens:", max_tokens);
-	const resp = await ai.run(modelId, {
-		messages,
-		response_format: { type: "json_schema", json_schema: schema },
-		max_tokens: max_tokens,
-	});
-	console.log("[callAi] ai.run 回傳:", resp);
-	const payload = typeof resp.response === "string" ? JSON.parse(resp.response) : resp.response;
-	console.log("[callAi] payload:", payload);
-	return payload;
+	const MAX_RETRY = 3;
+
+	for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
+		try {
+			console.log(`[callAi] (${attempt}/${MAX_RETRY}) model=${modelId}`);
+			const resp = await ai.run(modelId, {
+				messages,
+				response_format: { type: "json_schema", json_schema: schema },
+				max_tokens,
+			});
+
+			const payload = typeof resp.response === "string" ? JSON.parse(resp.response) : resp.response;
+
+			/* 檢查是否同時含有 hour / content 兩欄(或 reply)  */
+			if (payload && typeof payload === "object") return payload;
+
+			throw new Error("無效 JSON 內容");
+		} catch (err) {
+			console.error("[callAi] Error:", err);
+			if (attempt === MAX_RETRY) throw err; // 最後一次仍失敗 → 抛出
+			// 否則稍等 100 ms 後重試
+			await new Promise((r) => setTimeout(r, 100));
+		}
+	}
+
+	// 理論上到不了這行
+	throw new Error("AI 回傳失敗");
 }
