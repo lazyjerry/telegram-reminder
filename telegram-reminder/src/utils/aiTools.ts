@@ -103,9 +103,12 @@ async function parseReminder(ai: Ai, text: string): Promise<string> {
 	return payload;
 }
 
-/** 呼叫 Workers‑AI，若回傳非 JSON 或發生錯誤最多重試 3 次 */
+/** 呼叫 Workers‑AI，若回傳非 JSON 或發生錯誤最多重試 3 次。
+ *  若最終仍失敗，將所有錯誤訊息串成一段文字後 throw 出去。
+ */
 async function callAi(ai: Ai, modelId: string, messages: any, schema: any, max_tokens: number): Promise<any> {
 	const MAX_RETRY = 3;
+	const errs: string[] = [];
 
 	for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
 		try {
@@ -118,18 +121,21 @@ async function callAi(ai: Ai, modelId: string, messages: any, schema: any, max_t
 
 			const payload = typeof resp.response === "string" ? JSON.parse(resp.response) : resp.response;
 
-			/* 檢查是否同時含有 hour / content 兩欄(或 reply)  */
-			if (payload && typeof payload === "object") return payload;
-
+			if (payload && typeof payload === "object") return payload; // 成功
 			throw new Error("無效 JSON 內容");
-		} catch (err) {
-			console.error("[callAi] Error:", err);
-			if (attempt === MAX_RETRY) throw err; // 最後一次仍失敗 → 抛出
-			// 否則稍等 100 ms 後重試
-			await new Promise((r) => setTimeout(r, 100));
+		} catch (err: any) {
+			const msg = err?.message ?? String(err);
+			errs.push(`(${attempt}) ${msg}`);
+			console.error(`[callAi] Error attempt ${attempt}:`, msg);
+
+			if (attempt < MAX_RETRY) {
+				// 短暫等待再重試
+				await new Promise((r) => setTimeout(r, 100));
+			}
 		}
 	}
 
-	// 理論上到不了這行
-	throw new Error("AI 回傳失敗");
+	// 三次仍失敗，合併錯誤訊息
+	const errorText = ["AI 回傳失敗，錯誤列表：", ...errs].join("\n");
+	throw new Error(errorText);
 }
