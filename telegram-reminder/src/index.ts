@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { env } from "hono/adapter";
 import { parseReminder } from "./parseReminder";
 import { sendTG, sendTGWithAi } from "./utils/tg-bot";
+import { aiTools } from "./utils/aiTools";
 
 type Env = {
 	DB: D1Database;
@@ -11,7 +12,10 @@ type Env = {
 };
 
 /* ---------- 全域說明文字：只修改這裡 ---------- */
-const HELP_TEXT = ["📖 功能列表", "────────────────", "/start ‣ 訂閱並顯示說明", "/help  ‣ 查看本說明", "/hours HH HH ‣ 設定營業時間 [開始 結束] 記得要在指令後面輸入喔！", "/list  ‣ 列出全部排程", "/del <UUID> ‣ 刪除指定排程", "", "自然語言排程範例：", "  • 早上 9 點提醒我開會", "  • 每小時 提醒伸展"].join("\n");
+const HELP_TEXT = ["📖 功能列表", "────────────────", "/start ‣ 訂閱並顯示說明", "/help  ‣ 查看本說明", "/hours HH HH ‣ 設定營業時間 [開始 結束] 記得要在指令後面輸入喔！", "/list  ‣ 列出全部排程", "/del <UUID> ‣ 刪除指定排程", "", "🔗 網址摘要功能：", "  • 直接貼上網址即可獲得約 300 字的繁體中文摘要", "", "自然語言排程範例：", "  • 早上 9 點提醒我開會", "  • 每小時 提醒伸展"].join("\n");
+
+/* ---------- URL 檢測正則表達式 ---------- */
+const URL_REGEX = /^(https?:\/\/[^\s]+)$/i;
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -71,6 +75,39 @@ app.post("/webhook/:token", async (ctx) => {
 	/* /help */
 	if (text === "/help") {
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, HELP_TEXT);
+		return ctx.json({ ok: true });
+	}
+
+	/* 網址摘要功能 */
+	const urlMatch = text.match(URL_REGEX);
+	if (urlMatch) {
+		const url = urlMatch[1];
+		console.log("[webhook] 偵測到網址:", url);
+
+		try {
+			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "🔍 正在分析網頁內容，請稍候...");
+
+			const { AI } = env(ctx);
+			const summary = await aiTools.fetchAndSummarizeUrl(AI, url);
+
+			const response = [
+				"📄 網頁摘要",
+				"────────────────",
+				`🏷️ 網站名稱：${summary.websiteName}`,
+				`📂 網站屬性：${summary.websiteType}`,
+				"",
+				"📝 內容摘要：",
+				summary.summary,
+				"",
+				`🔗 原始連結：${url}`,
+			].join("\n");
+
+			await sendTG(TELEGRAM_BOT_TOKEN, chatId, response);
+		} catch (error: any) {
+			console.error("[webhook] 網址摘要錯誤:", error.message);
+			await sendTG(TELEGRAM_BOT_TOKEN, chatId, `⚠️ 無法分析該網址：${error.message}`);
+		}
+
 		return ctx.json({ ok: true });
 	}
 
