@@ -21,24 +21,52 @@ const app = new Hono<{ Bindings: Env }>();
 
 /* ---------- 共用 ---------- */
 const TPE_ZONE = "Asia/Taipei";
-const getTaipeiHour = () =>
-	new Date().toLocaleString("en-GB", {
+
+/** 時間以 'HH:MM' 表示，MM 僅支援 '00'（整點）或 '30'（半點） */
+const toMinutes = (t: string): number => {
+	const [h, m = "00"] = t.split(":");
+	return +h * 60 + +m;
+};
+
+/** 顯示用：把舊格式 'HH' 補成 'HH:00'，'HH:MM' 原樣回傳 */
+const fmtClock = (t: string): string => (t.includes(":") ? t : `${t}:00`);
+
+/** 取得台北現在時間，正規化到最近的整點/半點，回傳 'HH:MM' */
+const getTaipeiTimeKey = (): string => {
+	const hhmm = new Date().toLocaleString("en-GB", {
 		timeZone: TPE_ZONE,
 		hour12: false,
 		hour: "2-digit",
-	});
+		minute: "2-digit",
+	}); // "HH:MM"
+	const [h, m] = hhmm.split(":");
+	return `${h}:${+m < 30 ? "00" : "30"}`;
+};
 
 /**
- * 判斷目標小時 h ('00'–'23') 是否落在 open~close 之間
- * - 支援跨夜
+ * 解析使用者輸入的時間，僅接受整點與半點。
+ * 接受 'H'、'HH'、'H:MM'、'HH:MM'，回傳正規化 'HH:MM'；不合法回 null。
+ */
+const normHalfTime = (raw: string): string | null => {
+	const [hRaw, mRaw = "00"] = raw.split(":");
+	const h = +hRaw,
+		m = +mRaw;
+	if (!Number.isInteger(h) || h < 0 || h > 23) return null;
+	if (m !== 0 && m !== 30) return null;
+	return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+};
+
+/**
+ * 判斷目標時間 now ('HH:MM') 是否落在 open~close 之間
+ * - 支援半點與跨夜
  * - open === close 代表 24 小時營業
  */
-const isWithinHours = (h: string, open: string, close: string): boolean => {
-	const n = +h,
-		s = +open,
-		e = +close;
+const isWithinHours = (now: string, open: string, close: string): boolean => {
+	const n = toMinutes(now),
+		s = toMinutes(open),
+		e = toMinutes(close);
 
-	console.log(`[isWithinHours] 檢查小時: ${h} (數值: ${n}), 開始: ${open} (數值: ${s}), 結束: ${close} (數值: ${e})`);
+	console.log(`[isWithinHours] 檢查時間: ${now} (${n} 分), 開始: ${open} (${s} 分), 結束: ${close} (${e} 分)`);
 
 	if (s === e) {
 		console.log("[isWithinHours] 24 小時營業，回傳 true");
@@ -47,15 +75,23 @@ const isWithinHours = (h: string, open: string, close: string): boolean => {
 
 	if (s < e) {
 		const result = n >= s && n <= e;
-		console.log(`[isWithinHours] 同日範圍 (${s}~${e})，結果: ${result}`);
+		console.log(`[isWithinHours] 同日範圍 (${open}~${close})，結果: ${result}`);
 		return result;
 	}
 
-	// 跨夜範圍：例如 20~05
+	// 跨夜範圍：例如 20:00~05:30
 	const result = n >= s || n <= e;
-	console.log(`[isWithinHours] 跨夜範圍 (${s}~${e})，結果: ${result}`);
+	console.log(`[isWithinHours] 跨夜範圍 (${open}~${close})，結果: ${result}`);
 	return result;
 };
+
+/** 依時間鍵組查詢條件：精確匹配 'HH:MM'、每半小時 '*'、整點時相容舊 'HH' 格式 */
+const DUE_QUERY = `SELECT r.content, r.match_time, u.chat_id, u.open_hour, u.close_hour
+   FROM reminders r
+   JOIN users u ON u.username = r.username
+  WHERE r.match_time = ?1
+     OR r.match_time = '*'
+     OR (?2 = 1 AND r.match_time = ?3)`;
 
 /* ----- Webhook ---------- */
 app.post("/webhook/:token", async (ctx) => {
@@ -70,7 +106,7 @@ app.post("/webhook/:token", async (ctx) => {
 	const text = msg.text.trim();
 
 	/* 0) 取使用者營業時間 */
-	const userRow = (username && (await DB.prepare("SELECT open_hour, close_hour FROM users WHERE username = ?").bind(username).first<{ open_hour: string; close_hour: string }>())) || { open_hour: "00", close_hour: "23" };
+	const userRow = (username && (await DB.prepare("SELECT open_hour, close_hour FROM users WHERE username = ?").bind(username).first<{ open_hour: string; close_hour: string }>())) || { open_hour: "00:00", close_hour: "23:00" };
 
 	/* /help */
 	if (text === "/help") {
@@ -111,35 +147,26 @@ app.post("/webhook/:token", async (ctx) => {
 		return ctx.json({ ok: true });
 	}
 
-	/* /hours HH HH 或 營業時間 HH HH */
-	const hourCmd = text.match(/^(?:\/hours|營業時間)\s+(\d{1,2})\s+(\d{1,2})$/i);
+	/* /hours HH HH 或 營業時間 HH HH（支援半點，如 9:30 18:30） */
+	const hourCmd = text.match(/^(?:\/hours|營業時間)\s+(\d{1,2}(?::\d{2})?)\s+(\d{1,2}(?::\d{2})?)$/i);
 	if (hourCmd && username) {
-		let [, open, close] = hourCmd.map((s) => s.padStart(2, "0"));
+		const open = normHalfTime(hourCmd[1]);
+		const close = normHalfTime(hourCmd[2]);
 
-		/* --- 合法性檢查 --- */
-		const isValid = (h: string) => /^\d{2}$/.test(h) && +h >= 0 && +h <= 23;
-		if (!isValid(open) || !isValid(close)) {
-			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請輸入有效的時間（00–23）");
+		/* --- 合法性檢查：00:00–23:30，分鐘僅支援 00 或 30 --- */
+		if (!open || !close) {
+			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 請輸入有效的時間（00:00–23:30，分鐘僅支援 00 或 30），例如 /hours 9 18 或 /hours 9:30 18:30");
 			return ctx.json({ ok: true });
 		}
 
 		/* 24 小時營業：開關相同 */
 		const isFullDay = open === close;
 
-		/* 非 24h 時段需保證至少 1 小時 */
-		if (!isFullDay) {
-			const diff = (+close - +open + 24) % 24; // 跨夜時 +24
-			if (diff === 0) {
-				await sendTG(TELEGRAM_BOT_TOKEN, chatId, "⚠️ 開始與結束時間需至少相隔 1 小時，或輸入同一時間代表 24 小時營業");
-				return ctx.json({ ok: true });
-			}
-		}
-
 		/* --- 寫入資料庫 --- */
 		await DB.prepare("UPDATE users SET open_hour = ?, close_hour = ? WHERE username = ?").bind(open, close, username).run();
 
 		/* --- 組合回覆 --- */
-		const msg = isFullDay ? "✅ 已更新營業時間：24 小時營業" : +open > +close ? `✅ 已更新營業時間：${open}:00 → 次日 ${close}:00 (跨夜)` : `✅ 已更新營業時間：${open}:00–${close}:00`;
+		const msg = isFullDay ? "✅ 已更新營業時間：24 小時營業" : toMinutes(open) > toMinutes(close) ? `✅ 已更新營業時間：${open} → 次日 ${close} (跨夜)` : `✅ 已更新營業時間：${open}–${close}`;
 
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, msg);
 		return ctx.json({ ok: true });
@@ -151,7 +178,7 @@ app.post("/webhook/:token", async (ctx) => {
 		if (userRow.open_hour === userRow.close_hour) {
 			await sendTG(TELEGRAM_BOT_TOKEN, chatId, "📅 目前營業時間：24 小時營業");
 		} else {
-			await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📅 目前營業時間：${userRow.open_hour}:00–${userRow.close_hour}:00\n如果要修改，請在指令後面帶入小時，例如 /hours 10 23`);
+			await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📅 目前營業時間：${fmtClock(userRow.open_hour)}–${fmtClock(userRow.close_hour)}\n如果要修改，請在指令後面帶入時間，例如 /hours 10 23 或 /hours 9:30 18:30`);
 		}
 	}
 
@@ -165,7 +192,7 @@ app.post("/webhook/:token", async (ctx) => {
 		}
 
 		const lines = results.map((r) => {
-			const t = r.match_time === "*" ? "每小時" : `${r.match_time}:00`;
+			const t = r.match_time === "*" ? "每小時" : fmtClock(r.match_time);
 			return `• ${t} ⇒ ${r.content}\n  🆔 ${r.uuid}`;
 		});
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `📋 您的排程：\n\n${lines.join("\n\n")}`);
@@ -183,7 +210,7 @@ app.post("/webhook/:token", async (ctx) => {
 			.bind(username, chatId, username, username)
 			.run();
 
-		await sendTG(TELEGRAM_BOT_TOKEN, chatId, ["✅ 已訂閱提醒！", "", HELP_TEXT, "", `目前營業時間：${userRow.open_hour}:00–${userRow.close_hour}:00`, "⚠ 提醒僅在營業時間內推送"].join("\n"));
+		await sendTG(TELEGRAM_BOT_TOKEN, chatId, ["✅ 已訂閱提醒！", "", HELP_TEXT, "", `目前營業時間：${fmtClock(userRow.open_hour)}–${fmtClock(userRow.close_hour)}`, "⚠ 提醒僅在營業時間內推送"].join("\n"));
 		return ctx.json({ ok: true });
 	}
 
@@ -207,7 +234,7 @@ app.post("/webhook/:token", async (ctx) => {
 		}
 
 		const lines = results.map((r) => {
-			const t = r.match_time === "*" ? "每小時" : `${r.match_time}:00`;
+			const t = r.match_time === "*" ? "每小時" : fmtClock(r.match_time);
 			return `• ${t} ⇒ ${r.content}\n  /del ${r.uuid}`;
 		});
 		await sendTG(TELEGRAM_BOT_TOKEN, chatId, `⚠️ 您要刪除的排程（請複製貼上指令）：\n\n${lines.join("\n\n")}`);

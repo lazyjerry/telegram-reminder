@@ -27,7 +27,7 @@
 		}
 	],
 	"triggers": {
-		"crons": ["0 * * * *"]
+		"crons": ["0,30 * * * *"]
 	},
 	"ai": { "binding": "AI" }
 	// "observability": {
