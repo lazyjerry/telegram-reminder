@@ -31,9 +31,10 @@ const toMinutes = (t: string): number => {
 /** 顯示用：把舊格式 'HH' 補成 'HH:00'，'HH:MM' 原樣回傳 */
 const fmtClock = (t: string): string => (t.includes(":") ? t : `${t}:00`);
 
-/** 取得台北現在時間，正規化到最近的整點/半點，回傳 'HH:MM' */
-const getTaipeiTimeKey = (): string => {
-	const hhmm = new Date().toLocaleString("en-GB", {
+/** 取得指定（預設現在）台北時間，正規化到最近的整點/半點，回傳 'HH:MM'。
+ *  cron 應傳入 evt.scheduledTime 對應的 Date，避免實際執行延遲落入相鄰時段。 */
+const getTaipeiTimeKey = (at: Date = new Date()): string => {
+	const hhmm = at.toLocaleString("en-GB", {
 		timeZone: TPE_ZONE,
 		hour12: false,
 		hour: "2-digit",
@@ -327,8 +328,9 @@ app.get("/test/:token", async (ctx) => {
 
 /* ---------- Cron Job ---------- */
 export default {
-	async scheduled(_evt: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
-		const timeKey = getTaipeiTimeKey();
+	async scheduled(evt: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+		// 用 cron 預定觸發時刻（永遠是準點/半點），而非實際執行時間，避免時鐘偏移落入相鄰時段
+		const timeKey = getTaipeiTimeKey(new Date(evt.scheduledTime));
 		const [hh, mm] = timeKey.split(":");
 		const isTop = mm === "00" ? 1 : 0;
 
