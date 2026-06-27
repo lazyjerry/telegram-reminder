@@ -1,5 +1,5 @@
 import type { Ai } from "@cloudflare/ai";
-import { LLM_ID, LLM_TID } from "../ai-config";
+import { LLM_ID, LLM_TID, LLM_REPLY } from "../ai-config";
 
 const sanitize = (raw: string): string => {
 	let txt = raw
@@ -39,7 +39,7 @@ async function sendTGWithAi(ai: Ai, reminder: string, time12: string): Promise<s
 	const messages = [
 		{
 			role: "system",
-			content: "你是一個正式的中文角色扮演機器人，只能輸出 JSON 內的 reply 欄位文字，" + "不得出現任何 <assistant>、<think> 或額外標籤。",
+			content: "你是一個正式的中文角色扮演機器人，直接輸出要送出的提醒訊息文字（純文字，不要 JSON），" + "不得出現任何 <assistant>、<think> 或額外標籤。",
 		},
 		{
 			role: "user",
@@ -47,31 +47,21 @@ async function sendTGWithAi(ai: Ai, reminder: string, time12: string): Promise<s
 		},
 	];
 
-	const schema = {
-		type: "object",
-		properties: {
-			reply: { type: "string", description: "最終要送出的提醒訊息" },
-		},
-		required: ["reply"],
-		additionalProperties: false,
-	};
-
 	/** AI 隨機可用的最大 tokens 選項 */
 	const TOKEN_OPTS = [512, 1024, 2048] as const;
 	let cleanReply = "AI 錯誤，請確認原因修復。";
 	try {
-		console.log("[sendTGWithAi] 呼叫 callAi");
-		const payload = await callAi(ai, LLM_ID, messages, { type: "json_schema", json_schema: schema }, TOKEN_OPTS[Math.floor(Math.random() * TOKEN_OPTS.length)]);
-		console.log("[sendTGWithAi] callAi 回傳:", payload);
-
-		const reply = typeof payload?.reply === "string" ? payload.reply : "";
+		console.log("[sendTGWithAi] 呼叫 callAi（純文字模式）");
+		// 角色扮演回覆不需要 JSON Mode：傳 null schema 走純文字，故可用未支援 JSON Mode 的快速模型
+		const reply = await callAi(ai, LLM_REPLY, messages, null, TOKEN_OPTS[Math.floor(Math.random() * TOKEN_OPTS.length)]);
+		console.log("[sendTGWithAi] callAi 回傳:", reply);
 
 		cleanReply = sanitize(reply);
 		console.log("[sendTGWithAi] 清理後 reply:", cleanReply);
 
 		// 防止靜默失敗：AI 回傳空白時 Telegram 會拒收空訊息，改送 fallback
 		if (!cleanReply) {
-			console.warn("[sendTGWithAi] AI 回傳空白 reply，改用 fallback。payload:", payload);
+			console.warn("[sendTGWithAi] AI 回傳空白，改用 fallback。reply:", reply);
 			cleanReply = `⏰ ${time12} 提醒：${reminder}`;
 		}
 	} catch (e) {
@@ -129,7 +119,8 @@ const cleanJsonResponse = (raw: string): string => {
 	return cleaned;
 };
 
-/** 呼叫 Workers‑AI，若回傳非 JSON 或發生錯誤最多重試 3 次。
+/** 呼叫 Workers‑AI，最多重試 3 次。
+ *  schema 非 null：JSON Mode，回傳解析後物件；schema 為 null：純文字模式，回傳字串。
  *  若最終仍失敗，將所有錯誤訊息串成一段文字後 throw 出去。
  */
 async function callAi(ai: Ai, modelId: string, messages: any, schema: any, max_tokens: number): Promise<any> {
@@ -139,16 +130,22 @@ async function callAi(ai: Ai, modelId: string, messages: any, schema: any, max_t
 	for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
 		try {
 			console.log(`[callAi] (${attempt}/${MAX_RETRY}) model=${modelId}`);
-			const resp = await ai.run(modelId, {
-				messages,
-				response_format: { type: "json_schema", json_schema: schema },
-				max_tokens,
-			});
+			const runOpts: any = { messages, max_tokens };
+			// 只有 JSON Mode 才帶 response_format；純文字模式不帶，才能用未支援 JSON Mode 的模型
+			if (schema) runOpts.response_format = { type: "json_schema", json_schema: schema };
+			const resp = await ai.run(modelId, runOpts);
 
 			let rawResponse = typeof resp.response === "string" ? resp.response : JSON.stringify(resp.response);
 			console.log(`[callAi] Raw response:`, rawResponse.substring(0, 200));
 
-			// 清理 markdown code blocks
+			// 純文字模式：直接回傳清乾淨的字串
+			if (!schema) {
+				const text = rawResponse.trim();
+				if (text) return text; // 成功
+				throw new Error("空白文字回應");
+			}
+
+			// JSON Mode：清理 markdown code blocks 後解析
 			const cleanedResponse = cleanJsonResponse(rawResponse);
 			const payload = JSON.parse(cleanedResponse);
 

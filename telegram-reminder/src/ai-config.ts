@@ -3,6 +3,12 @@
 // 注意：llama-3.1-8b-instruct 已於 2026-05-30 下架（5028），改用 3.3 現役模型
 // 注意：llama-3.1-8b-instruct-fast / llama-3.1-70b-instruct 文件雖列為支援 JSON Mode，
 //       實測 response_format=json_schema 會回 "Grammar error: Invalid type: json_schema"（8007/400），
-//       屬 Cloudflare 文件謊報，請勿使用。詳見 cloudflare-docs issue #27786
-export const LLM_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"; // 排程回覆使用
-export const LLM_TID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"; // 解析提醒使用
+//       屬 Cloudflare 文件謊報。但純文字（不帶 response_format）生成正常，故可用於 LLM_REPLY。
+//       詳見 cloudflare-docs issue #27786
+
+// 角色扮演回覆：純文字輸出、不走 JSON Mode，可用未支援 JSON Mode 的快速小模型
+export const LLM_REPLY = "@cf/meta/llama-3.1-8b-instruct-fast";
+// 網址摘要使用（需 JSON Mode 多欄位輸出）
+export const LLM_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+// 解析提醒使用（需 JSON Mode 多欄位輸出）
+export const LLM_TID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
