@@ -31,6 +31,14 @@ const toMinutes = (t: string): number => {
 /** 顯示用：把舊格式 'HH' 補成 'HH:00'，'HH:MM' 原樣回傳 */
 const fmtClock = (t: string): string => (t.includes(":") ? t : `${t}:00`);
 
+/** 取得台北現在的兩位數小時 'HH'（00–23） */
+const getTaipeiHour = (): string =>
+	new Date().toLocaleString("en-GB", {
+		timeZone: TPE_ZONE,
+		hour12: false,
+		hour: "2-digit",
+	});
+
 /** 取得台北現在時間，正規化到最近的整點/半點，回傳 'HH:MM' */
 const getTaipeiTimeKey = (): string => {
 	const hhmm = new Date().toLocaleString("en-GB", {
@@ -314,15 +322,18 @@ app.get("/test/:token", async (ctx) => {
 	// 解析提醒時間和內容
 	const { AI } = env(ctx);
 
+	// 必須 await：用 waitUntil 在回應送出後會被提早取消（70b 推論較慢），導致訊息送不出去
+	const tasks: Promise<unknown>[] = [];
 	for (const row of results) {
 		const shouldSend = row.match_time === "*" ? isWithinHours(hour, row.open_hour, row.close_hour) : isWithinHours(hour, row.open_hour, row.close_hour);
 
 		if (shouldSend) {
-			ctx.executionCtx.waitUntil(sendTGWithAi(AI, TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
+			tasks.push(sendTGWithAi(AI, TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
 		}
 	}
+	await Promise.allSettled(tasks);
 
-	return ctx.json({ ok: true, testHour: hour, sent: results.length });
+	return ctx.json({ ok: true, testHour: hour, sent: tasks.length });
 });
 
 /* ---------- Cron Job ---------- */
@@ -341,13 +352,16 @@ export default {
 
 		// 解析提醒時間和內容;
 
+		// await 而非 waitUntil：cron 同樣會在 handler 結束後取消未完成的背景任務
+		const tasks: Promise<unknown>[] = [];
 		for (const row of results) {
 			const shouldSend = row.match_time === "*" ? isWithinHours(hour, row.open_hour, row.close_hour) : isWithinHours(hour, row.open_hour, row.close_hour);
 
 			if (shouldSend) {
-				ctx.waitUntil(sendTGWithAi(env.AI, env.TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
+				tasks.push(sendTGWithAi(env.AI, env.TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
 			}
 		}
+		await Promise.allSettled(tasks);
 	},
 	fetch: app.fetch,
 };

@@ -64,10 +64,16 @@ async function sendTGWithAi(ai: Ai, reminder: string, time12: string): Promise<s
 		const payload = await callAi(ai, LLM_ID, messages, { type: "json_schema", json_schema: schema }, TOKEN_OPTS[Math.floor(Math.random() * TOKEN_OPTS.length)]);
 		console.log("[sendTGWithAi] callAi 回傳:", payload);
 
-		const reply = payload.reply;
+		const reply = typeof payload?.reply === "string" ? payload.reply : "";
 
 		cleanReply = sanitize(reply);
 		console.log("[sendTGWithAi] 清理後 reply:", cleanReply);
+
+		// 防止靜默失敗：AI 回傳空白時 Telegram 會拒收空訊息，改送 fallback
+		if (!cleanReply) {
+			console.warn("[sendTGWithAi] AI 回傳空白 reply，改用 fallback。payload:", payload);
+			cleanReply = `⏰ ${time12} 提醒：${reminder}`;
+		}
 	} catch (e) {
 		console.error("AI Error:", e);
 		cleanReply = `AI 錯誤，請確認原因：${e.message} 記得修復喔。`;

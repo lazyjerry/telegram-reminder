@@ -1,13 +1,18 @@
 import type { Ai } from "@cloudflare/ai"; // 2024-05+ 型別檔
 import { aiTools } from "./aiTools";
 
-export const sendTG = (token: string, id: number, text: string) => {
+export const sendTG = async (token: string, id: number, text: string) => {
 	console.log(`[sendTG] Sending message to chat_id: ${id}`);
-	return fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+	const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ chat_id: id, text }),
 	});
+	// 不要吞掉 Telegram 端錯誤（例如空訊息會回 400）
+	if (!res.ok) {
+		console.error(`[sendTG] Telegram API 失敗 ${res.status}:`, await res.text());
+	}
+	return res;
 };
 
 /**
