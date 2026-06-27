@@ -31,14 +31,6 @@ const toMinutes = (t: string): number => {
 /** 顯示用：把舊格式 'HH' 補成 'HH:00'，'HH:MM' 原樣回傳 */
 const fmtClock = (t: string): string => (t.includes(":") ? t : `${t}:00`);
 
-/** 取得台北現在的兩位數小時 'HH'（00–23） */
-const getTaipeiHour = (): string =>
-	new Date().toLocaleString("en-GB", {
-		timeZone: TPE_ZONE,
-		hour12: false,
-		hour: "2-digit",
-	});
-
 /** 取得台北現在時間，正規化到最近的整點/半點，回傳 'HH:MM' */
 const getTaipeiTimeKey = (): string => {
 	const hhmm = new Date().toLocaleString("en-GB", {
@@ -93,13 +85,15 @@ const isWithinHours = (now: string, open: string, close: string): boolean => {
 	return result;
 };
 
-/** 依時間鍵組查詢條件：精確匹配 'HH:MM'、每半小時 '*'、整點時相容舊 'HH' 格式 */
+/** 依時間鍵組查詢條件：
+ *  - 精確匹配 'HH:MM'（含半點 'HH:30'）
+ *  - 每小時 '*' 與舊 'HH' 格式僅在整點(:00)觸發，避免半點重複提醒
+ *  參數：?1 時間鍵 'HH:MM'、?2 是否整點(1/0)、?3 小時 'HH' */
 const DUE_QUERY = `SELECT r.content, r.match_time, u.chat_id, u.open_hour, u.close_hour
    FROM reminders r
    JOIN users u ON u.username = r.username
   WHERE r.match_time = ?1
-     OR r.match_time = '*'
-     OR (?2 = 1 AND r.match_time = ?3)`;
+     OR (?2 = 1 AND (r.match_time = '*' OR r.match_time = ?3))`;
 
 /* ----- Webhook ---------- */
 app.post("/webhook/:token", async (ctx) => {
@@ -308,56 +302,44 @@ app.get("/test/:token", async (ctx) => {
 	if (ctx.req.param("token") !== TELEGRAM_WEBHOOK_TOKEN) return ctx.text("403", 403);
 
 	const qHour = ctx.req.query("hour");
-	const hour = qHour && /^\d{1,2}$/.test(qHour) ? qHour.padStart(2, "0") : getTaipeiHour();
+	// 測試：?hour=HH 視為該整點 'HH:00'，否則用現在台北時間鍵
+	const timeKey = qHour && /^\d{1,2}$/.test(qHour) ? `${qHour.padStart(2, "0")}:00` : getTaipeiTimeKey();
+	const [hh, mm] = timeKey.split(":");
+	const isTop = mm === "00" ? 1 : 0;
 
-	const { results } = await DB.prepare(
-		`SELECT r.content, r.match_time, u.chat_id, u.open_hour, u.close_hour
-       FROM reminders r
-       JOIN users u ON u.username = r.username
-      WHERE r.match_time = ? OR r.match_time = '*'`
-	)
-		.bind(hour)
+	const { results } = await DB.prepare(DUE_QUERY)
+		.bind(timeKey, isTop, hh)
 		.all<{ content: string; match_time: string; chat_id: number; open_hour: string; close_hour: string }>();
 
-	// 解析提醒時間和內容
 	const { AI } = env(ctx);
 
-	// 必須 await：用 waitUntil 在回應送出後會被提早取消（70b 推論較慢），導致訊息送不出去
+	// 必須 await：用 waitUntil 在回應送出後會被提早取消，導致訊息送不出去
 	const tasks: Promise<unknown>[] = [];
 	for (const row of results) {
-		const shouldSend = row.match_time === "*" ? isWithinHours(hour, row.open_hour, row.close_hour) : isWithinHours(hour, row.open_hour, row.close_hour);
-
-		if (shouldSend) {
+		if (isWithinHours(timeKey, row.open_hour, row.close_hour)) {
 			tasks.push(sendTGWithAi(AI, TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
 		}
 	}
 	await Promise.allSettled(tasks);
 
-	return ctx.json({ ok: true, testHour: hour, sent: tasks.length });
+	return ctx.json({ ok: true, timeKey, matched: results.length, sent: tasks.length });
 });
 
 /* ---------- Cron Job ---------- */
 export default {
-	async scheduled(_evt: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-		const hour = getTaipeiHour();
+	async scheduled(_evt: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+		const timeKey = getTaipeiTimeKey();
+		const [hh, mm] = timeKey.split(":");
+		const isTop = mm === "00" ? 1 : 0;
 
-		const { results } = await env.DB.prepare(
-			`SELECT r.content, r.match_time, u.chat_id, u.open_hour, u.close_hour
-         FROM reminders r
-         JOIN users u ON u.username = r.username
-        WHERE r.match_time = ? OR r.match_time = '*'`
-		)
-			.bind(hour)
+		const { results } = await env.DB.prepare(DUE_QUERY)
+			.bind(timeKey, isTop, hh)
 			.all<{ content: string; match_time: string; chat_id: number; open_hour: string; close_hour: string }>();
-
-		// 解析提醒時間和內容;
 
 		// await 而非 waitUntil：cron 同樣會在 handler 結束後取消未完成的背景任務
 		const tasks: Promise<unknown>[] = [];
 		for (const row of results) {
-			const shouldSend = row.match_time === "*" ? isWithinHours(hour, row.open_hour, row.close_hour) : isWithinHours(hour, row.open_hour, row.close_hour);
-
-			if (shouldSend) {
+			if (isWithinHours(timeKey, row.open_hour, row.close_hour)) {
 				tasks.push(sendTGWithAi(env.AI, env.TELEGRAM_BOT_TOKEN, row.chat_id, row.content, TPE_ZONE));
 			}
 		}

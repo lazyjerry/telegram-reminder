@@ -1,5 +1,5 @@
 import type { Ai } from "@cloudflare/ai";
-import { LLM_ID, LLM_TID, LLM_REPLY } from "../ai-config";
+import { LLM } from "../ai-config";
 
 const sanitize = (raw: string): string => {
 	let txt = raw
@@ -19,7 +19,7 @@ export type UrlSummary = {
 };
 
 export const aiTools = {
-	parseReminder,
+	extractContent,
 	callAi,
 	sendTGWithAi,
 	fetchAndSummarizeUrl,
@@ -52,8 +52,7 @@ async function sendTGWithAi(ai: Ai, reminder: string, time12: string): Promise<s
 	let cleanReply = "AI 錯誤，請確認原因修復。";
 	try {
 		console.log("[sendTGWithAi] 呼叫 callAi（純文字模式）");
-		// 角色扮演回覆不需要 JSON Mode：傳 null schema 走純文字，故可用未支援 JSON Mode 的快速模型
-		const reply = await callAi(ai, LLM_REPLY, messages, null, TOKEN_OPTS[Math.floor(Math.random() * TOKEN_OPTS.length)]);
+		const reply = await callAi(ai, LLM, messages, TOKEN_OPTS[Math.floor(Math.random() * TOKEN_OPTS.length)]);
 		console.log("[sendTGWithAi] callAi 回傳:", reply);
 
 		cleanReply = sanitize(reply);
@@ -73,84 +72,39 @@ async function sendTGWithAi(ai: Ai, reminder: string, time12: string): Promise<s
 }
 
 /**
- * 解析提醒指令，並回傳物件 { hour: "00–23 或 *", content: "提醒內容" }
+ * 從提醒指令擷取「要被提醒的內容」（去除時間詞），回傳純文字。
+ * 時間由呼叫端的 chrono 解析，不在此處理。
  */
-async function parseReminder(ai: Ai, text: string): Promise<string> {
-	console.log("[parseReminder] 開始，text:", text);
-	const messages = [
-		{
-			role: "system",
-			content: "你是一個文字解析工具，只能輸出 JSON 物件，不得帶其他文字或標籤。",
-		},
-		{
-			role: "user",
-			content: ["需求：讀取一句繁體中文的「提醒指令」。", '輸出 JSON 物件，格式：{ "hour": "00–23 或 *", "content": "提醒內容" }。', '如果文字包含「每小時」請回 "hour": "*"，否則回解析到的 24 小時制兩位數時。', "提醒內容請分辨語意，將指令中「需要被提醒的內容」擷取出來。", "用戶交代給你一段需要被提醒的時間與內容，請擷取出時間和需要被提醒的內容", `指令：${text}`].join("\n"),
-		},
-	];
-
-	const schema = {
-		type: "object",
-		properties: {
-			hour: {
-				type: "string",
-				description: "24 小時制兩位數 (00–23) 或 * 表示每小時",
-			},
-			content: { type: "string", description: "去除時間後的提醒文字" },
-		},
-		required: ["hour", "content"],
-		additionalProperties: false,
-	};
-	console.log("[parseReminder] 呼叫 callAi");
-	const payload = await callAi(ai, LLM_TID, messages, schema, 256);
-	console.log("[parseReminder] callAi 回傳:", payload);
-	return payload;
+async function extractContent(ai: Ai, text: string): Promise<string> {
+	console.log("[extractContent] 開始，text:", text);
+	const content = await askText(
+		ai,
+		"你是一個文字解析工具，只輸出「要被提醒的事情」這段純文字，去掉時間詞，不要任何解釋、引號或標籤。",
+		["從這句提醒指令中擷取「要被提醒的內容」（去除時間詞，只留事情本身）：", `指令：${text}`].join("\n"),
+		128
+	);
+	console.log("[extractContent] 回傳:", content);
+	return content;
 }
 
-/**
- * 清理 AI 回傳的 JSON 字串，移除 markdown code blocks
+/** 純文字呼叫 Workers‑AI，最多重試 3 次；trim 後非空即成功。
+ *  三次仍失敗則把所有錯誤訊息串成一段文字後 throw 出去。
  */
-const cleanJsonResponse = (raw: string): string => {
-	let cleaned = raw.trim();
-	// 移除 ```json ... ``` 或 ``` ... ``` 包裹
-	const codeBlockMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-	if (codeBlockMatch) {
-		cleaned = codeBlockMatch[1].trim();
-	}
-	return cleaned;
-};
-
-/** 呼叫 Workers‑AI，最多重試 3 次。
- *  schema 非 null：JSON Mode，回傳解析後物件；schema 為 null：純文字模式，回傳字串。
- *  若最終仍失敗，將所有錯誤訊息串成一段文字後 throw 出去。
- */
-async function callAi(ai: Ai, modelId: string, messages: any, schema: any, max_tokens: number): Promise<any> {
+async function callAi(ai: Ai, modelId: string, messages: any, max_tokens: number): Promise<string> {
 	const MAX_RETRY = 3;
 	const errs: string[] = [];
 
 	for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
 		try {
 			console.log(`[callAi] (${attempt}/${MAX_RETRY}) model=${modelId}`);
-			const runOpts: any = { messages, max_tokens };
-			// 只有 JSON Mode 才帶 response_format；純文字模式不帶，才能用未支援 JSON Mode 的模型
-			if (schema) runOpts.response_format = { type: "json_schema", json_schema: schema };
-			const resp = await ai.run(modelId, runOpts);
+			const resp = await ai.run(modelId, { messages, max_tokens });
 
 			let rawResponse = typeof resp.response === "string" ? resp.response : JSON.stringify(resp.response);
 			console.log(`[callAi] Raw response:`, rawResponse.substring(0, 200));
 
-			// 純文字模式：直接回傳清乾淨的字串
-			if (!schema) {
-				const text = rawResponse.trim();
-				if (text) return text; // 成功
-				throw new Error("空白文字回應");
-			}
-
-			// JSON Mode：清理 markdown code blocks 後解析
-			const cleanedResponse = cleanJsonResponse(rawResponse);
-			const payload = JSON.parse(cleanedResponse);
-
-			if (payload && typeof payload === "object") return payload; // 成功
-			throw new Error("無效 JSON 內容");
+			const text = rawResponse.trim();
+			if (text) return text; // 成功
+			throw new Error("空白文字回應");
 		} catch (err: any) {
 			const msg = err?.message ?? String(err);
 			errs.push(`(${attempt}) ${msg}`);
@@ -166,6 +120,15 @@ async function callAi(ai: Ai, modelId: string, messages: any, schema: any, max_t
 	// 三次仍失敗，合併錯誤訊息
 	const errorText = ["AI 回傳失敗，錯誤列表：", ...errs].join("\n");
 	throw new Error(errorText);
+}
+
+/** 單值純文字呼叫：包 callAi + sanitize，供多欄位拆成多次呼叫重用 */
+async function askText(ai: Ai, system: string, user: string, max_tokens: number): Promise<string> {
+	const messages = [
+		{ role: "system", content: system },
+		{ role: "user", content: user },
+	];
+	return sanitize(await callAi(ai, LLM, messages, max_tokens));
 }
 
 /**
@@ -219,9 +182,9 @@ async function fetchAndSummarizeUrl(ai: Ai, url: string): Promise<UrlSummary> {
 			.replace(/\s+/g, " ")
 			.trim();
 
-		// 限制內容長度以避免 token 過多
-		if (pageContent.length > 8000) {
-			pageContent = pageContent.substring(0, 8000) + "...";
+		// 限制內容長度：輸入過長會增加 JSON Mode 約束生成的失敗率（5024），4000 字足夠摘要
+		if (pageContent.length > 4000) {
+			pageContent = pageContent.substring(0, 4000) + "...";
 		}
 
 		console.log("[fetchAndSummarizeUrl] 提取標題:", pageTitle);
@@ -232,63 +195,24 @@ async function fetchAndSummarizeUrl(ai: Ai, url: string): Promise<UrlSummary> {
 	}
 
 	// 使用 AI 生成摘要
-	const messages = [
-		{
-			role: "system",
-			content:
-				"你是一個專業的網頁內容分析工具。請根據提供的網頁內容，生成一份繁體中文摘要。" +
-				"只能輸出 JSON 物件，不得帶其他文字或標籤。",
-		},
-		{
-			role: "user",
-			content: [
-				"請分析以下網頁內容，並提供：",
-				"1. 網站名稱（websiteName）：從標題或內容推斷網站名稱",
-				"2. 網站屬性（websiteType）：判斷網站類型，例如：社群網站、SaaS平台、新聞網站、部落格、電商網站、論壇、政府機關、企業官網、教育平台、工具網站等",
-				"3. 內容摘要（summary）：約 250-300 字的繁體中文摘要，說明網頁的主要內容",
-				"",
-				`網址：${url}`,
-				`網頁標題：${pageTitle || "無法取得"}`,
-				`網頁內容：${pageContent || "無法取得內容"}`,
-			].join("\n"),
-		},
-	];
+	// 三欄位拆成 3 次純文字呼叫並行；各自帶 fallback，部分失敗不影響其他欄位
+	const pageCtx = [`網址：${url}`, `網頁標題：${pageTitle || "無法取得"}`, `網頁內容：${pageContent || "無法取得內容"}`].join("\n");
 
-	const schema = {
-		type: "object",
-		properties: {
-			websiteName: {
-				type: "string",
-				description: "網站名稱",
-			},
-			websiteType: {
-				type: "string",
-				description: "網站屬性類型",
-			},
-			summary: {
-				type: "string",
-				description: "約 250-300 字的繁體中文內容摘要",
-			},
-		},
-		required: ["websiteName", "websiteType", "summary"],
-		additionalProperties: false,
-	};
+	const [websiteName, websiteType, summary] = await Promise.all([
+		askText(ai, "你是網頁分析工具，只輸出網站名稱這幾個字，不要任何解釋或標點。", `根據以下資訊推斷網站名稱：\n${pageCtx}`, 64).catch((e: any) => {
+			console.error("[fetchAndSummarizeUrl] 網站名稱失敗:", e?.message ?? e);
+			return pageTitle || "未知網站";
+		}),
+		askText(ai, "你是網頁分析工具，只輸出一個網站類型詞（例如：新聞網站、部落格、電商網站、SaaS平台、論壇、政府機關、企業官網、教育平台、工具網站、社群網站），不要其他文字。", `判斷以下網頁的類型：\n${pageCtx}`, 32).catch((e: any) => {
+			console.error("[fetchAndSummarizeUrl] 網站屬性失敗:", e?.message ?? e);
+			return "未知類型";
+		}),
+		askText(ai, "你是專業的網頁內容分析工具，只輸出一段約 250-300 字的繁體中文摘要純文字，不要標題、不要條列、不要 JSON。", `為以下網頁內容寫摘要：\n${pageCtx}`, 1024).catch((e: any) => {
+			console.error("[fetchAndSummarizeUrl] 摘要失敗:", e?.message ?? e);
+			return `無法生成摘要：${e?.message ?? e}`;
+		}),
+	]);
 
-	try {
-		const payload = await callAi(ai, LLM_ID, messages, schema, 1024);
-		console.log("[fetchAndSummarizeUrl] AI 回傳:", payload);
-
-		return {
-			websiteName: sanitize(payload.websiteName || "未知網站"),
-			websiteType: sanitize(payload.websiteType || "未知類型"),
-			summary: sanitize(payload.summary || "無法生成摘要"),
-		};
-	} catch (error: any) {
-		console.error("[fetchAndSummarizeUrl] AI 摘要生成失敗:", error.message);
-		return {
-			websiteName: pageTitle || "未知網站",
-			websiteType: "未知類型",
-			summary: `無法生成摘要：${error.message}`,
-		};
-	}
+	console.log("[fetchAndSummarizeUrl] 三欄位:", { websiteName, websiteType, summary });
+	return { websiteName, websiteType, summary };
 }

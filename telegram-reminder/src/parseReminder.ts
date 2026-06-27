@@ -9,7 +9,8 @@ import { aiTools, Parsed } from "./utils/aiTools";
 export const parseReminder = async (ai: Ai, text: string): Promise<Parsed> => {
 	console.log("[parseReminder] Received text:", text);
 
-	const hit = chrono.zh.parse(text, { forwardDate: true })[0];
+	// forwardDate 須放第三參數（options）；放第二參數會被當 reference 而失效
+	const hit = chrono.zh.parse(text, undefined, { forwardDate: true })[0];
 	console.log("[parseReminder] Chrono parse result:", hit);
 
 	if (!hit) {
@@ -17,17 +18,22 @@ export const parseReminder = async (ai: Ai, text: string): Promise<Parsed> => {
 		return {};
 	}
 
-	try {
-		const payload = await aiTools.parseReminder(ai, text);
-		console.log("[parseReminder] aiTools.parseReminder payload:", payload);
+	// 時間取自 chrono；無小時則視為無法排程
+	const h = hit.start.get("hour");
+	if (h == null) {
+		console.log("[parseReminder] Chrono 未解析到小時，returning empty object.");
+		return {};
+	}
+	const hour = String(h).padStart(2, "0");
 
-		const { hour, content } = payload as Parsed;
+	try {
+		const content = await aiTools.extractContent(ai, text);
 		if (hour && content) {
-			console.log("[parseReminder] Successfully parsed hour and content:", { hour, content });
+			console.log("[parseReminder] Parsed:", { hour, content });
 			return { hour, content };
 		}
 	} catch (error) {
-		console.log("[parseReminder] Error in aiTools.parseReminder:", error);
+		console.log("[parseReminder] Error in extractContent:", error);
 	}
 
 	console.log("[parseReminder] Failed to parse reminder, returning empty object.");
