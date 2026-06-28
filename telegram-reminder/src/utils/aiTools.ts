@@ -131,6 +131,47 @@ async function askText(ai: Ai, system: string, user: string, max_tokens: number)
 	return sanitize(await callAi(ai, LLM, messages, max_tokens));
 }
 
+/** 從 HTML 抽取 meta 描述與 JSON-LD 文字。
+ *  SPA（Threads / IG / X 等）的伺服器 HTML 不含正文，可用內文常只藏在這些 meta 標籤裡。
+ */
+function extractMetaText(html: string): string {
+	const parts: string[] = [];
+	const decode = (s: string) =>
+		s
+			.replace(/&amp;/g, "&")
+			.replace(/&lt;/g, "<")
+			.replace(/&gt;/g, ">")
+			.replace(/&quot;/g, '"')
+			.replace(/&#0?39;/g, "'")
+			.replace(/&#x27;/gi, "'");
+
+	// og:description / twitter:description / 一般 description；屬性順序兩種寫法都接
+	const metaPropFirst = /<meta[^>]+(?:property|name)=["'](?:og:description|twitter:description|description)["'][^>]*content=["']([^"']*)["']/gi;
+	const metaContentFirst = /<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["'](?:og:description|twitter:description|description)["']/gi;
+	let m: RegExpExecArray | null;
+	while ((m = metaPropFirst.exec(html))) if (m[1].trim()) parts.push(decode(m[1].trim()));
+	while ((m = metaContentFirst.exec(html))) if (m[1].trim()) parts.push(decode(m[1].trim()));
+
+	// JSON-LD 內的 articleBody / description / text / headline
+	const ldRe = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+	while ((m = ldRe.exec(html))) {
+		try {
+			const collect = (o: any) => {
+				if (!o || typeof o !== "object") return;
+				for (const k of ["articleBody", "description", "text", "headline"]) {
+					if (typeof o[k] === "string" && o[k].trim()) parts.push(o[k].trim());
+				}
+				for (const v of Object.values(o)) if (v && typeof v === "object") collect(v);
+			};
+			collect(JSON.parse(m[1].trim()));
+		} catch {
+			/* JSON-LD 格式不正確就略過 */
+		}
+	}
+
+	return [...new Set(parts)].join("\n").trim();
+}
+
 /**
  * 抓取網頁內容並生成繁體中文摘要
  * @param ai - Cloudflare Workers AI 實例
@@ -142,6 +183,8 @@ async function fetchAndSummarizeUrl(ai: Ai, url: string): Promise<UrlSummary> {
 
 	let pageContent = "";
 	let pageTitle = "";
+	let metaDesc = "";
+	let fetchFailed = false;
 
 	try {
 		// 抓取網頁內容
@@ -163,6 +206,9 @@ async function fetchAndSummarizeUrl(ai: Ai, url: string): Promise<UrlSummary> {
 		// 提取標題
 		const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
 		pageTitle = titleMatch ? titleMatch[1].trim() : "";
+
+		// 先抽 meta / JSON-LD（SPA 正文常只藏在這裡，需在砍 script 前取）
+		metaDesc = extractMetaText(html);
 
 		// 移除 script、style 等標籤，提取純文字
 		pageContent = html
@@ -191,12 +237,30 @@ async function fetchAndSummarizeUrl(ai: Ai, url: string): Promise<UrlSummary> {
 		console.log("[fetchAndSummarizeUrl] 提取內容長度:", pageContent.length);
 	} catch (error: any) {
 		console.error("[fetchAndSummarizeUrl] 抓取網頁失敗:", error.message);
-		pageContent = `無法抓取網頁內容：${error.message}`;
+		fetchFailed = true;
+		pageContent = "";
+	}
+
+	// meta 描述通常比正文乾淨，放前面；兩者擇優併成有效內容
+	const effectiveContent = [metaDesc, pageContent].filter(Boolean).join("\n").trim();
+
+	// 守衛：抓取失敗、或有效內容過短/等於標題（SPA 只回 boilerplate）時，
+	// 直接回報無法取得，不呼叫摘要 AI——既省 token，也擋掉空輸入幻覺（捏造情節）。
+	const normalized = effectiveContent.replace(/\s/g, "");
+	const contentTooThin = fetchFailed || normalized.length < 40 || normalized === (pageTitle || "").replace(/\s/g, "");
+
+	if (contentTooThin) {
+		console.warn("[fetchAndSummarizeUrl] 內容不足，跳過摘要 AI。fetchFailed:", fetchFailed, "有效長度:", normalized.length);
+		return {
+			websiteName: pageTitle || "未知網站",
+			websiteType: "未知類型",
+			summary: "無法取得網頁內容。此頁面可能需要登入，或內容由前端 JavaScript 動態載入，無法直接擷取文字。",
+		};
 	}
 
 	// 使用 AI 生成摘要
 	// 三欄位拆成 3 次純文字呼叫並行；各自帶 fallback，部分失敗不影響其他欄位
-	const pageCtx = [`網址：${url}`, `網頁標題：${pageTitle || "無法取得"}`, `網頁內容：${pageContent || "無法取得內容"}`].join("\n");
+	const pageCtx = [`網址：${url}`, `網頁標題：${pageTitle || "無法取得"}`, `網頁內容：${effectiveContent}`].join("\n");
 
 	const [websiteName, websiteType, summary] = await Promise.all([
 		askText(ai, "你是網頁分析工具，只輸出網站名稱這幾個字，不要任何解釋或標點。", `根據以下資訊推斷網站名稱：\n${pageCtx}`, 64).catch((e: any) => {
@@ -207,7 +271,12 @@ async function fetchAndSummarizeUrl(ai: Ai, url: string): Promise<UrlSummary> {
 			console.error("[fetchAndSummarizeUrl] 網站屬性失敗:", e?.message ?? e);
 			return "未知類型";
 		}),
-		askText(ai, "你是專業的網頁內容分析工具，只輸出一段約 250-300 字的繁體中文摘要純文字，不要標題、不要條列、不要 JSON。", `為以下網頁內容寫摘要：\n${pageCtx}`, 1024).catch((e: any) => {
+		askText(
+			ai,
+			"你是專業的網頁內容分析工具。嚴格規則：1.只能根據實際提供的網頁內容撰寫，嚴禁臆測、推論或虛構任何未出現在內容中的情節、人物、場景或評論；2.只輸出一段約 250-300 字的繁體中文摘要純文字，不要標題、不要條列、不要 JSON；3.若提供的內容不足以判斷，直接輸出「網頁內容不足，無法生成摘要」，禁止編造。",
+			`為以下網頁內容寫摘要：\n${pageCtx}`,
+			1024
+		).catch((e: any) => {
 			console.error("[fetchAndSummarizeUrl] 摘要失敗:", e?.message ?? e);
 			return `無法生成摘要：${e?.message ?? e}`;
 		}),
