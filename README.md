@@ -2,6 +2,8 @@
 
 把 Telegram 變成你的私人鬧鐘／小管家，使用自然語言就能排「整點」或「每小時」的提醒，在指定整點的時候，使用老媽的口吻提醒你該注意的事項。後端完全跑在 Cloudflare Workers + D1，0 維護、即時推播。
 
+> 完整業務邏輯與 Mermaid 流程圖：[`BUSINESS_LOGIC.md`](./BUSINESS_LOGIC.md)
+
 ⸻
 
 ## 目錄

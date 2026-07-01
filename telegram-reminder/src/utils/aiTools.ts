@@ -136,14 +136,19 @@ async function askText(ai: Ai, system: string, user: string, max_tokens: number)
  */
 function extractMetaText(html: string): string {
 	const parts: string[] = [];
+	const decodeNumericEntity = (entity: string, rawCodePoint: string, radix: number): string => {
+		const codePoint = Number.parseInt(rawCodePoint, radix);
+		return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
+	};
 	const decode = (s: string) =>
 		s
-			.replace(/&amp;/g, "&")
-			.replace(/&lt;/g, "<")
-			.replace(/&gt;/g, ">")
-			.replace(/&quot;/g, '"')
-			.replace(/&#0?39;/g, "'")
-			.replace(/&#x27;/gi, "'");
+			.replace(/&amp;/gi, "&")
+			.replace(/&#x([0-9a-f]+);/gi, (entity, codePoint) => decodeNumericEntity(entity, codePoint, 16))
+			.replace(/&#(\d+);/g, (entity, codePoint) => decodeNumericEntity(entity, codePoint, 10))
+			.replace(/&lt;/gi, "<")
+			.replace(/&gt;/gi, ">")
+			.replace(/&quot;/gi, '"')
+			.replace(/&apos;/gi, "'");
 
 	// og:description / twitter:description / 一般 description；屬性順序兩種寫法都接
 	const metaPropFirst = /<meta[^>]+(?:property|name)=["'](?:og:description|twitter:description|description)["'][^>]*content=["']([^"']*)["']/gi;
@@ -241,13 +246,15 @@ async function fetchAndSummarizeUrl(ai: Ai, url: string): Promise<UrlSummary> {
 		pageContent = "";
 	}
 
-	// meta 描述通常比正文乾淨，放前面；兩者擇優併成有效內容
-	const effectiveContent = [metaDesc, pageContent].filter(Boolean).join("\n").trim();
+	// 正文只有網站殼層時，改用 og:description、description、twitter:description 與 JSON-LD。
+	const normalizedPageContent = pageContent.replace(/\s/g, "");
+	const normalizedTitle = (pageTitle || "").replace(/\s/g, "");
+	const hasUsablePageContent = normalizedPageContent.length >= 40 && normalizedPageContent !== normalizedTitle;
+	const effectiveContent = (hasUsablePageContent ? pageContent : metaDesc).trim();
 
-	// 守衛：抓取失敗、或有效內容過短/等於標題（SPA 只回 boilerplate）時，
-	// 直接回報無法取得，不呼叫摘要 AI——既省 token，也擋掉空輸入幻覺（捏造情節）。
+	// 沒有正文也沒有 meta 描述時，不呼叫摘要 AI，避免空輸入造成幻覺。
 	const normalized = effectiveContent.replace(/\s/g, "");
-	const contentTooThin = fetchFailed || normalized.length < 40 || normalized === (pageTitle || "").replace(/\s/g, "");
+	const contentTooThin = fetchFailed || !normalized;
 
 	if (contentTooThin) {
 		console.warn("[fetchAndSummarizeUrl] 內容不足，跳過摘要 AI。fetchFailed:", fetchFailed, "有效長度:", normalized.length);
@@ -273,7 +280,7 @@ async function fetchAndSummarizeUrl(ai: Ai, url: string): Promise<UrlSummary> {
 		}),
 		askText(
 			ai,
-			"你是專業的網頁內容分析工具。嚴格規則：1.只能根據實際提供的網頁內容撰寫，嚴禁臆測、推論或虛構任何未出現在內容中的情節、人物、場景或評論；2.只輸出一段約 250-300 字的繁體中文摘要純文字，不要標題、不要條列、不要 JSON；3.若提供的內容不足以判斷，直接輸出「網頁內容不足，無法生成摘要」，禁止編造。",
+			"你是專業的網頁內容分析工具。嚴格規則：1.只能根據實際提供的網頁內容撰寫，嚴禁臆測、推論或虛構任何未出現在內容中的情節、人物、場景或評論；2.只輸出一段最多 300 字的繁體中文摘要純文字，不要標題、不要條列、不要 JSON；3.若提供的內容不足以判斷，直接輸出「網頁內容不足，無法生成摘要」；4.原文簡短時輸出較短摘要，不得為湊字數擴寫。",
 			`為以下網頁內容寫摘要：\n${pageCtx}`,
 			1024
 		).catch((e: any) => {
